@@ -10,6 +10,7 @@ import json
 import os
 import uuid
 import io
+import time
 from datetime import datetime
 from functools import wraps
 
@@ -104,13 +105,16 @@ class DB:
                     dashboard_id INTEGER NOT NULL REFERENCES dashboards(id)
                 );
             """)
-            # Seed default user
-            cur.execute("SELECT id FROM users LIMIT 1")
-            if not cur.fetchone():
-                cur.execute(
-                    "INSERT INTO users (username, password_hash) VALUES (%s, %s)",
-                    ('admin', generate_password_hash('admin'))
-                )
+            # Seed default user in a race-safe way when workers start together.
+            cur.execute(
+                """
+                INSERT INTO users (username, password_hash)
+                VALUES (%s, %s)
+                ON CONFLICT (username) DO NOTHING
+                """,
+                ('admin', generate_password_hash('admin'))
+            )
+            if cur.rowcount == 1:
                 print("Default user created: admin / admin")
             conn.commit()
             cur.close()
@@ -254,7 +258,17 @@ class DB:
 
 def initialize_database():
     """Initialize schema/users for both local run and WSGI servers."""
-    DB.init()
+    attempts = int(os.environ.get('DB_INIT_ATTEMPTS', '5'))
+    retry_delay = float(os.environ.get('DB_INIT_RETRY_DELAY_SECONDS', '2'))
+    for attempt in range(1, attempts + 1):
+        try:
+            DB.init()
+            return
+        except Exception as exc:
+            print(f"[startup] DB init attempt {attempt}/{attempts} failed: {exc}")
+            if attempt == attempts:
+                raise
+            time.sleep(retry_delay)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
