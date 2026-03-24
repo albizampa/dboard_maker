@@ -1,0 +1,87 @@
+{% extends 'base.html' %}
+{% block title %}My Dashboards — DataLens{% endblock %}
+{% block content %}
+<div class="home-page">
+  <div class="home-header">
+    <div>
+      <h2>My Dashboards</h2>
+      <p>{{ dashboards|length }} dashboard{{ 's' if dashboards|length != 1 else '' }}</p>
+    </div>
+    <a href="{{ url_for('new_dashboard') }}" class="btn-primary">
+      <i class="fa fa-plus"></i> New Dashboard
+    </a>
+  </div>
+
+  {% if not dashboards %}
+  <div class="empty-state">
+    <div class="empty-icon">◈</div>
+    <h3>No dashboards yet</h3>
+    <p>Create your first dashboard to start visualizing your data</p>
+    <a href="{{ url_for('new_dashboard') }}" class="btn-primary">
+      <i class="fa fa-plus"></i> Create Dashboard
+    </a>
+  </div>
+  {% else %}
+  <div class="dashboard-grid">
+    {% for d in dashboards %}
+    <div class="dashboard-card" data-uid="{{ d.uid }}">
+      <div class="card-header">
+        <div class="card-icon">◈</div>
+        <div class="card-menu">
+          <button class="icon-btn" onclick="showCardMenu(event, '{{ d.uid }}', '{{ d.name|e }}')">
+            <i class="fa fa-ellipsis-v"></i>
+          </button>
+        </div>
+      </div>
+      <a href="{{ url_for('dashboard_view', uid=d.uid) }}" class="card-body">
+        <h3>{{ d.name }}</h3>
+        <p>{{ d.description or 'No description' }}</p>
+        <div class="card-meta">
+          <span><i class="fa fa-database"></i> {{ d.datasets|length }} dataset{{ 's' if d.datasets|length != 1 else '' }}</span>
+          <span><i class="fa fa-chart-bar"></i> {{ d.widgets|length }} widget{{ 's' if d.widgets|length != 1 else '' }}</span>
+        </div>
+      </a>
+      <div class="card-footer">
+        <span class="card-date">Updated {{ d.updated_display }}</span>
+        <a href="{{ url_for('dashboard_view', uid=d.uid) }}" class="btn-ghost btn-sm">Open <i class="fa fa-arrow-right"></i></a>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+
+<div id="cardMenu" class="context-menu" style="display:none">
+  <button onclick="renameFromMenu()"><i class="fa fa-pen"></i> Rename</button>
+  <button onclick="deleteFromMenu()" class="danger"><i class="fa fa-trash"></i> Delete</button>
+</div>
+
+<script>
+let menuUid = null, menuName = null;
+function showCardMenu(e, uid, name) {
+  e.stopPropagation(); e.preventDefault();
+  menuUid = uid; menuName = name;
+  const m = document.getElementById('cardMenu');
+  m.style.display = 'block';
+  m.style.left = (e.pageX - 120) + 'px';
+  m.style.top = e.pageY + 'px';
+}
+document.addEventListener('click', () => { document.getElementById('cardMenu').style.display = 'none'; });
+
+function renameFromMenu() {
+  const name = prompt('New dashboard name:', menuName);
+  if (!name || !name.trim()) return;
+  fetch(`/api/dashboard/${menuUid}/rename`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({name})
+  }).then(() => location.reload());
+}
+
+function deleteFromMenu() {
+  if (!confirm(`Delete "${menuName}"? This cannot be undone.`)) return;
+  fetch(`/api/dashboard/${menuUid}/delete`, {method: 'POST'})
+    .then(() => location.reload());
+}
+</script>
+{% endblock %}
