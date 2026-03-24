@@ -1,0 +1,797 @@
+{% extends 'base.html' %}
+{% block title %}{{ dashboard.name }} — DataLens{% endblock %}
+{% block head %}
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/gridstack.js/10.3.1/gridstack.min.css">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+<style>
+/* ── Export dropdown ─────────────────────────────────────────────────────── */
+.export-dropdown { position: relative; }
+.export-menu {
+  display: none; position: absolute; right: 0; top: calc(100% + 6px);
+  background: var(--bg2); border: 1px solid var(--border2);
+  border-radius: var(--radius); min-width: 190px; z-index: 600;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5); overflow: hidden;
+  animation: exportFadeIn 0.12s ease;
+}
+@keyframes exportFadeIn { from { opacity:0; transform:translateY(-4px); } to { opacity:1; transform:translateY(0); } }
+.export-menu.open { display: block; }
+.export-menu button {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 11px 16px; background: none; border: none;
+  color: var(--text2); font-size: 13px; font-family: var(--font-body);
+  cursor: pointer; transition: all 0.15s; text-align: left;
+}
+.export-menu button:hover { background: var(--bg3); color: var(--text); }
+.export-menu button i { width: 14px; text-align: center; color: var(--accent); }
+
+/* ── Export progress overlay ─────────────────────────────────────────────── */
+#exportOverlay {
+  display: none; position: fixed; inset: 0; z-index: 9999;
+  background: rgba(13,15,20,0.85); backdrop-filter: blur(4px);
+  align-items: center; justify-content: center; flex-direction: column; gap: 16px;
+}
+#exportOverlay.active { display: flex; }
+.export-spinner {
+  width: 48px; height: 48px; border: 3px solid var(--border2);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.export-msg { color: var(--text); font-size: 14px; font-family: var(--font-body); }
+
+/* ── Print styles (PDF via browser print) ───────────────────────────────── */
+@media print {
+  .dash-topbar, .side-panel, .panel-overlay, #exportOverlay { display: none !important; }
+  .dashboard-page { height: auto !important; }
+  .dash-body { overflow: visible !important; }
+  .dash-canvas { overflow: visible !important; }
+  .grid-stack { min-height: unset !important; }
+  .widget-actions { display: none !important; }
+  body { background: #0d0f14 !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+}
+.kpi-formula-help {
+  font-size: 11px; color: var(--text3); margin-top: 8px; padding: 10px 12px;
+  background: rgba(99,102,241,0.06); border: 1px solid rgba(99,102,241,0.2);
+  border-radius: var(--radius); line-height: 1.8;
+}
+.kpi-formula-help strong { color: var(--text2); }
+</style>
+{% endblock %}
+{% block content %}
+<div class="dashboard-page" id="dashboardPage">
+
+  <!-- Top bar -->
+  <div class="dash-topbar">
+    <div class="dash-topbar-left">
+      <a href="{{ url_for('home') }}" class="icon-btn" title="Back"><i class="fa fa-arrow-left"></i></a>
+      <div class="dash-title-wrap">
+        <h2 class="dash-title" id="dashTitle">{{ dashboard.name }}</h2>
+        <button class="icon-btn edit-title-btn" onclick="editTitle()" title="Rename"><i class="fa fa-pen"></i></button>
+      </div>
+    </div>
+    <div class="dash-topbar-center">
+      <div class="mode-toggle">
+        <button class="mode-btn active" id="editModeBtn" onclick="setMode('edit')"><i class="fa fa-pencil-alt"></i> Edit</button>
+        <button class="mode-btn" id="viewModeBtn" onclick="setMode('view')"><i class="fa fa-eye"></i> View</button>
+      </div>
+    </div>
+    <div class="dash-topbar-right">
+      <button class="btn-ghost btn-sm" onclick="showUploadPanel()"><i class="fa fa-upload"></i> Add Data</button>
+      <button class="btn-ghost btn-sm dash-filter-btn" id="dashFilterBtn" onclick="openDashboardFilters()">
+        <i class="fa fa-filter"></i> Filters
+        <span class="dash-filter-badge" id="dashFilterBadge" style="display:none">0</span>
+      </button>
+      <button class="btn-ghost btn-sm" onclick="showTransformPanel()" id="transformBtn" style="display:none"><i class="fa fa-magic"></i> Transform Data</button>
+      <div class="export-dropdown" id="exportDropdown">
+        <button class="btn-ghost btn-sm" onclick="toggleExportMenu(event)">
+          <i class="fa fa-download"></i> Export <i class="fa fa-chevron-down" style="font-size:10px;margin-left:2px"></i>
+        </button>
+        <div class="export-menu" id="exportMenu">
+          <button onclick="exportHTML()"><i class="fa fa-code"></i> Download as HTML</button>
+          <button onclick="exportPDF()"><i class="fa fa-file-pdf"></i> Download as PDF</button>
+        </div>
+      </div>
+      <button class="btn-primary btn-sm" onclick="openWidgetWizard()"><i class="fa fa-plus"></i> Add Widget</button>
+    </div>
+  </div>
+
+  <!-- Main area -->
+  <div class="dash-body">
+    <!-- Canvas -->
+    <div class="dash-canvas" id="dashCanvas">
+      <div class="grid-stack" id="grid"></div>
+      <div class="canvas-empty" id="canvasEmpty" style="display:none">
+        <div class="empty-canvas-icon">◈</div>
+        <h3>Your canvas is empty</h3>
+        <p>Add your first widget to start building this dashboard</p>
+        <button class="btn-primary" onclick="openWidgetWizard()"><i class="fa fa-plus"></i> Add Widget</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     WIDGET WIZARD PANEL (slides in from right)
+════════════════════════════════════════════════════════════════ -->
+<div class="side-panel" id="widgetPanel">
+  <div class="panel-header">
+    <div>
+      <h3 id="panelTitle">Add Widget</h3>
+      <p id="panelSubtitle" class="panel-subtitle">Step 1 of 3</p>
+    </div>
+    <button class="icon-btn" onclick="closePanel()"><i class="fa fa-times"></i></button>
+  </div>
+
+  <!-- Wizard steps nav -->
+  <div class="panel-steps">
+    <div class="panel-step active" id="ps1" onclick="panelGoStep(1)"><span>1</span> Type</div>
+    <div class="panel-step" id="ps2" onclick="panelGoStep(2)"><span>2</span> Data</div>
+    <div class="panel-step" id="ps3" onclick="panelGoStep(3)"><span>3</span> Style</div>
+  </div>
+
+  <div class="panel-body">
+
+    <!-- Step 1: Chart type -->
+    <div class="panel-section" id="panel-step-1">
+      <p class="section-label">Choose a visualization type</p>
+      <div class="chart-type-grid">
+        <button class="chart-type-btn" data-type="bar" onclick="selectChartType('bar')">
+          <i class="fa fa-chart-bar"></i><span>Bar Chart</span>
+        </button>
+        <button class="chart-type-btn" data-type="line" onclick="selectChartType('line')">
+          <i class="fa fa-chart-line"></i><span>Line Chart</span>
+        </button>
+        <button class="chart-type-btn" data-type="pie" onclick="selectChartType('pie')">
+          <i class="fa fa-chart-pie"></i><span>Pie Chart</span>
+        </button>
+        <button class="chart-type-btn" data-type="donut" onclick="selectChartType('donut')">
+          <i class="fa fa-circle-notch"></i><span>Donut</span>
+        </button>
+        <button class="chart-type-btn" data-type="area" onclick="selectChartType('area')">
+          <i class="fa fa-wave-square"></i><span>Area Chart</span>
+        </button>
+        <button class="chart-type-btn" data-type="scatter" onclick="selectChartType('scatter')">
+          <i class="fa fa-braille"></i><span>Scatter</span>
+        </button>
+        <button class="chart-type-btn" data-type="kpi" onclick="selectChartType('kpi')">
+          <i class="fa fa-tachometer-alt"></i><span>KPI Card</span>
+        </button>
+        <button class="chart-type-btn" data-type="table" onclick="selectChartType('table')">
+          <i class="fa fa-table"></i><span>Table</span>
+        </button>
+      </div>
+      <div class="panel-footer">
+        <button class="btn-primary btn-full" onclick="panelGoStep(2)" id="toStep2Btn" disabled>Next: Configure Data <i class="fa fa-arrow-right"></i></button>
+      </div>
+    </div>
+
+    <!-- Step 2: Data & Config -->
+    <div class="panel-section" id="panel-step-2" style="display:none">
+      <div class="form-group">
+        <label>Widget Title</label>
+        <input type="text" id="widgetTitle" placeholder="e.g. Monthly Sales" />
+      </div>
+      <div class="form-group">
+        <label>Data Source <span class="required">*</span></label>
+        <select id="datasetSelect" onchange="onDatasetChange()">
+          <option value="">— Select dataset —</option>
+        </select>
+        <button class="btn-ghost btn-sm mt-xs" onclick="showUploadPanel()"><i class="fa fa-plus"></i> Upload new file</button>
+      </div>
+
+      <div id="axisConfig" style="display:none">
+        <div id="xAxisGroup" class="form-group">
+          <label id="xAxisLabel">X Axis / Category</label>
+          <select id="xAxisSelect" onchange="onWizardAxisChange()"></select>
+        </div>
+
+        <div id="yAxisGroup" class="form-group">
+          <label id="yAxisLabel">Values (Y Axis)</label>
+          <div id="yColsWrap" class="y-cols-wrap"></div>
+          <button type="button" class="btn-ghost btn-xs mt-xs" id="addYColBtn" onclick="addYColumn()"><i class="fa fa-plus"></i> Add column</button>
+        </div>
+
+        <div id="seriesGroup" class="form-group">
+          <label>Split into Series by <span class="optional">(pivot)</span></label>
+          <select id="seriesSelect">
+            <option value="">— None (use Y columns as series) —</option>
+          </select>
+          <p class="field-hint">Group rows by a column value — one line/bar per unique value</p>
+        </div>
+
+        <div id="aggGroup" class="form-group">
+          <label>Aggregation</label>
+          <select id="aggregationSelect" onchange="onWizardAggChange()">
+            <option value="none">No aggregation (raw rows)</option>
+            <option value="sum">Sum</option>
+            <option value="avg">Average</option>
+            <option value="count">Count</option>
+            <option value="distinct_count">Distinct Count</option>
+            <option value="min">Min</option>
+            <option value="max">Max</option>
+          </select>
+        </div>
+
+        <div id="dateGroupRow" class="form-group" style="display:none">
+          <label>Group Dates By</label>
+          <select id="dateGroupSelect">
+            <option value="">— No grouping (exact value) —</option>
+            <option value="day">Day</option>
+            <option value="week">Week</option>
+            <option value="month">Month</option>
+            <option value="quarter">Quarter</option>
+            <option value="year">Year</option>
+          </select>
+          <p class="field-hint">Bucket all rows into the chosen period and aggregate values</p>
+        </div>
+
+        <div id="sortGroup" class="form-group">
+          <label>Sort X Axis</label>
+          <select id="sortSelect">
+            <option value="">— No sort (data order) —</option>
+            <option value="x_asc">X → Ascending</option>
+            <option value="x_desc">X → Descending</option>
+            <option value="y_asc">Y ↑ Ascending</option>
+            <option value="y_desc">Y ↓ Descending</option>
+          </select>
+        </div>
+
+        <div id="kpiConfig" style="display:none" class="form-group">
+          <div style="display:flex;gap:4px;background:var(--bg3);border-radius:8px;padding:3px;margin-bottom:10px">
+            <button type="button" id="kpiModeSimple" class="mode-btn active" onclick="setKpiMode('simple','kpi')">Simple</button>
+            <button type="button" id="kpiModeFormula" class="mode-btn" onclick="setKpiMode('formula','kpi')">Formula</button>
+          </div>
+          <div id="kpiSimpleConfig">
+            <label>KPI Column</label>
+            <select id="kpiColumnSelect"></select>
+            <select id="kpiAggSelect" class="mt-xs">
+              <option value="sum">Sum</option>
+              <option value="avg">Average</option>
+              <option value="count">Count</option>
+              <option value="distinct_count">Distinct Count</option>
+              <option value="min">Min</option>
+              <option value="max">Max</option>
+            </select>
+          </div>
+          <div id="kpiFormulaConfig" style="display:none">
+            <label>Formula</label>
+            <textarea id="kpiFormula" rows="3" placeholder="e.g. SUM(Revenue) / COUNT(Orders) * 100"
+              style="font-family:monospace;font-size:13px;resize:vertical"
+              oninput="validateKpiFormula('kpiFormula','kpiFormulaHint')"></textarea>
+            <div id="kpiFormulaHint" style="font-size:11px;margin-top:4px;min-height:16px;color:var(--text3)"></div>
+            <div class="kpi-formula-help">
+              <strong>Functions:</strong> SUM() &middot; AVG() &middot; COUNT() &middot; DISTINCT_COUNT() &middot; MIN() &middot; MAX() &middot; MEDIAN()<br>
+              <strong>Operators:</strong> + &nbsp; &minus; &nbsp; * &nbsp; / &nbsp; ( )<br>
+              <strong>Example:</strong> SUM(Conversions) / SUM(Clicks) * 100
+            </div>
+          </div>
+          <input type="text" id="kpiPrefix" placeholder="Prefix (e.g. $)" class="mt-xs" />
+          <input type="text" id="kpiSuffix" placeholder="Suffix (e.g. %)" class="mt-xs" />
+          <select id="kpiDecimals" class="mt-xs">
+            <option value="auto">Decimals: Auto</option>
+            <option value="0">0 decimal places</option>
+            <option value="1">1 decimal place</option>
+            <option value="2">2 decimal places</option>
+            <option value="3">3 decimal places</option>
+          </select>
+        </div>
+
+        <!-- Filters -->
+        <div class="filters-section">
+          <div class="filters-header">
+            <label>Filters &amp; Conditions</label>
+            <button type="button" class="btn-ghost btn-xs" onclick="addFilter()"><i class="fa fa-plus"></i> Add Filter</button>
+          </div>
+          <div id="filtersList"></div>
+        </div>
+      </div>
+
+      <div class="panel-footer">
+        <button class="btn-ghost" onclick="panelGoStep(1)"><i class="fa fa-arrow-left"></i> Back</button>
+        <button class="btn-primary" onclick="panelGoStep(3)">Next: Style <i class="fa fa-arrow-right"></i></button>
+      </div>
+    </div>
+
+    <!-- Step 3: Style & Preview -->
+    <div class="panel-section" id="panel-step-3" style="display:none">
+
+        <!-- Secondary Y Axis (line/area only) -->
+        <div id="wizardY2Section" style="display:none">
+          <div style="border-top:1px solid var(--border);margin:8px 0 16px;"></div>
+          <p class="section-label" style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">
+            <i class="fa fa-chart-line" style="color:var(--accent2)"></i> Secondary Y Axis (right)
+          </p>
+          <div class="form-group">
+            <label>Secondary Column</label>
+            <select id="y2ColSelect">
+              <option value="">— None (no secondary axis) —</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Secondary Aggregation</label>
+            <select id="y2AggSelect">
+              <option value="sum">Sum</option>
+              <option value="avg">Average</option>
+              <option value="count">Count</option>
+              <option value="distinct_count">Distinct Count</option>
+              <option value="min">Min</option>
+              <option value="max">Max</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Left Axis Label <span class="optional">(optional)</span></label>
+            <input type="text" id="y1TitleInput" placeholder="e.g. Total Price (€)" />
+          </div>
+          <div class="form-group">
+            <label>Right Axis Label <span class="optional">(optional)</span></label>
+            <input type="text" id="y2TitleInput" placeholder="e.g. Distinct Countries" />
+          </div>
+        </div>
+      <div class="form-group">
+        <label>Color Palette</label>
+        <div class="palette-picker" id="palettePicker">
+          <button class="palette-btn active" data-palette="default" onclick="selectPalette('default')" title="Default">
+            <span style="background:#6366f1"></span><span style="background:#8b5cf6"></span><span style="background:#ec4899"></span>
+          </button>
+          <button class="palette-btn" data-palette="ocean" onclick="selectPalette('ocean')" title="Ocean">
+            <span style="background:#06b6d4"></span><span style="background:#0ea5e9"></span><span style="background:#6366f1"></span>
+          </button>
+          <button class="palette-btn" data-palette="forest" onclick="selectPalette('forest')" title="Forest">
+            <span style="background:#10b981"></span><span style="background:#34d399"></span><span style="background:#6ee7b7"></span>
+          </button>
+          <button class="palette-btn" data-palette="sunset" onclick="selectPalette('sunset')" title="Sunset">
+            <span style="background:#f59e0b"></span><span style="background:#ef4444"></span><span style="background:#ec4899"></span>
+          </button>
+          <button class="palette-btn" data-palette="mono" onclick="selectPalette('mono')" title="Mono">
+            <span style="background:#1e293b"></span><span style="background:#475569"></span><span style="background:#94a3b8"></span>
+          </button>
+        </div>
+      </div>
+      <div class="form-group" id="barModeGroup" style="display:none">
+        <label>Bar Mode</label>
+        <select id="barModeSelect">
+          <option value="group">Grouped</option>
+          <option value="stack">Stacked</option>
+          <option value="relative">Stacked 100%</option>
+        </select>
+      </div>
+      <div class="form-group" id="lineStyleGroup" style="display:none">
+        <label>Line Style</label>
+        <select id="lineStyleSelect">
+          <option value="linear">Straight</option>
+          <option value="spline">Smooth (spline)</option>
+          <option value="hv">Step</option>
+        </select>
+      </div>
+      <div class="form-group" id="lineMarkersGroup" style="display:none">
+        <label>Show Markers</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="showMarkers" checked />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="form-group">
+        <label>Show Legend</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="showLegend" checked />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="form-group" id="showLabelsGroup">
+        <label>Show Data Labels</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="showLabels" />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="form-group">
+        <label>Widget Size</label>
+        <select id="widgetSize">
+          <option value="small">Small (3×3)</option>
+          <option value="medium" selected>Medium (6×4)</option>
+          <option value="large">Large (9×5)</option>
+          <option value="full">Full Width (12×5)</option>
+        </select>
+      </div>
+
+      <!-- Preview -->
+      <div class="preview-section">
+        <label>Preview</label>
+        <div class="preview-box" id="previewBox">
+          <div class="preview-placeholder"><i class="fa fa-chart-bar"></i> Preview will appear here</div>
+        </div>
+      </div>
+
+      <div class="panel-footer">
+        <button class="btn-ghost" onclick="panelGoStep(2)"><i class="fa fa-arrow-left"></i> Back</button>
+        <button class="btn-primary" onclick="saveWidget()" id="saveWidgetBtn"><i class="fa fa-check"></i> Add to Dashboard</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════
+     WIDGET EDIT PANEL (slides in when clicking edit on widget)
+════════════════════════════════════════════════════════════════ -->
+<div class="side-panel" id="editPanel">
+  <div class="panel-header">
+    <div>
+      <h3>Edit Widget</h3>
+      <p class="panel-subtitle" id="editWidgetTypeLabel"></p>
+    </div>
+    <button class="icon-btn" onclick="closeEditPanel()"><i class="fa fa-times"></i></button>
+  </div>
+  <div class="panel-body">
+    <div class="edit-tabs">
+      <button class="edit-tab active" data-tab="data" onclick="showEditTab('data',this)">Data</button>
+      <button class="edit-tab" data-tab="filters" onclick="showEditTab('filters',this)">Filters</button>
+      <button class="edit-tab" data-tab="style" onclick="showEditTab('style',this)">Style</button>
+    </div>
+
+    <div class="edit-tab-content" id="editTab-data">
+      <div class="form-group">
+        <label>Widget Title</label>
+        <input type="text" id="editWidgetTitle" />
+      </div>
+      <div class="form-group">
+        <label>Data Source</label>
+        <select id="editDatasetSelect" onchange="onEditDatasetChange()"></select>
+      </div>
+      <div id="editAxisConfig">
+        <div class="form-group" id="editXGroup">
+          <label id="editXLabel">X Axis / Category</label>
+          <select id="editXSelect" onchange="onEditAxisChange()"></select>
+        </div>
+        <div class="form-group" id="editYGroup">
+          <label id="editYLabel">Values (Y Axis)</label>
+          <div id="editYColsWrap" class="y-cols-wrap"></div>
+          <button type="button" class="btn-ghost btn-xs mt-xs" onclick="addEditYColumn()"><i class="fa fa-plus"></i> Add column</button>
+        </div>
+
+        <!-- Secondary Y Axis (line/area only) -->
+        <div id="editY2Section" style="display:none">
+          <div style="border-top:1px solid var(--border);margin:8px 0 16px;"></div>
+          <p style="font-size:12px;font-weight:600;color:var(--text2);text-transform:uppercase;letter-spacing:.05em;margin-bottom:12px;">
+            <i class="fa fa-chart-line" style="color:var(--accent2)"></i> Secondary Y Axis (right)
+          </p>
+          <div class="form-group">
+            <label>Secondary Column</label>
+            <select id="editY2ColSelect">
+              <option value="">— None (no secondary axis) —</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Secondary Aggregation</label>
+            <select id="editY2AggSelect">
+              <option value="sum">Sum</option>
+              <option value="avg">Average</option>
+              <option value="count">Count</option>
+              <option value="distinct_count">Distinct Count</option>
+              <option value="min">Min</option>
+              <option value="max">Max</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Left Axis Label <span class="optional">(optional)</span></label>
+            <input type="text" id="editY1TitleInput" placeholder="e.g. Total Price (€)" />
+          </div>
+          <div class="form-group">
+            <label>Right Axis Label <span class="optional">(optional)</span></label>
+            <input type="text" id="editY2TitleInput" placeholder="e.g. Distinct Countries" />
+          </div>
+        </div>
+        <div id="editSeriesGroup" class="form-group">
+          <label>Split into Series by <span class="optional">(pivot)</span></label>
+          <select id="editSeriesSelect">
+            <option value="">— None —</option>
+          </select>
+          <p class="field-hint">One line/bar per unique value in this column</p>
+        </div>
+        <div class="form-group">
+          <label>Aggregation</label>
+          <select id="editAggSelect" onchange="onEditAggChange()">
+            <option value="none">No aggregation (raw rows)</option>
+            <option value="sum">Sum</option>
+            <option value="avg">Average</option>
+            <option value="count">Count</option>
+            <option value="distinct_count">Distinct Count</option>
+            <option value="min">Min</option>
+            <option value="max">Max</option>
+          </select>
+        </div>
+        <div id="editDateGroupRow" class="form-group" style="display:none">
+          <label>Group Dates By</label>
+          <select id="editDateGroupSelect">
+            <option value="">— No grouping (exact value) —</option>
+            <option value="day">Day</option>
+            <option value="week">Week</option>
+            <option value="month">Month</option>
+            <option value="quarter">Quarter</option>
+            <option value="year">Year</option>
+          </select>
+          <p class="field-hint">Bucket all rows into the chosen period and aggregate values</p>
+        </div>
+
+        <div class="form-group">
+          <label>Sort X Axis</label>
+          <select id="editSortSelect">
+            <option value="">— No sort —</option>
+            <option value="x_asc">X → Ascending</option>
+            <option value="x_desc">X → Descending</option>
+            <option value="y_asc">Y ↑ Ascending</option>
+            <option value="y_desc">Y ↓ Descending</option>
+          </select>
+        </div>
+        <div id="editKpiConfig" style="display:none" class="form-group">
+          <div style="display:flex;gap:4px;background:var(--bg3);border-radius:8px;padding:3px;margin-bottom:10px">
+            <button type="button" id="editKpiModeSimple" class="mode-btn active" onclick="setKpiMode('simple','editKpi')">Simple</button>
+            <button type="button" id="editKpiModeFormula" class="mode-btn" onclick="setKpiMode('formula','editKpi')">Formula</button>
+          </div>
+          <div id="editKpiSimpleConfig">
+            <label>KPI Column</label>
+            <select id="editKpiColumn"></select>
+            <select id="editKpiAgg" class="mt-xs">
+              <option value="sum">Sum</option>
+              <option value="avg">Average</option>
+              <option value="count">Count</option>
+              <option value="distinct_count">Distinct Count</option>
+              <option value="min">Min</option>
+              <option value="max">Max</option>
+            </select>
+          </div>
+          <div id="editKpiFormulaConfig" style="display:none">
+            <label>Formula</label>
+            <textarea id="editKpiFormula" rows="3" placeholder="e.g. SUM(Revenue) / COUNT(Orders) * 100"
+              style="font-family:monospace;font-size:13px;resize:vertical"
+              oninput="validateKpiFormula('editKpiFormula','editKpiFormulaHint')"></textarea>
+            <div id="editKpiFormulaHint" style="font-size:11px;margin-top:4px;min-height:16px;color:var(--text3)"></div>
+            <div class="kpi-formula-help">
+              <strong>Functions:</strong> SUM() &middot; AVG() &middot; COUNT() &middot; DISTINCT_COUNT() &middot; MIN() &middot; MAX() &middot; MEDIAN()<br>
+              <strong>Operators:</strong> + &nbsp; &minus; &nbsp; * &nbsp; / &nbsp; ( )<br>
+              <strong>Example:</strong> SUM(Conversions) / SUM(Clicks) * 100
+            </div>
+          </div>
+          <input type="text" id="editKpiPrefix" placeholder="Prefix (e.g. $)" class="mt-xs" />
+          <input type="text" id="editKpiSuffix" placeholder="Suffix (e.g. %)" class="mt-xs" />
+          <select id="editKpiDecimals" class="mt-xs">
+            <option value="auto">Decimals: Auto</option>
+            <option value="0">0 decimal places</option>
+            <option value="1">1 decimal place</option>
+            <option value="2">2 decimal places</option>
+            <option value="3">3 decimal places</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="edit-tab-content" id="editTab-filters" style="display:none">
+
+      <!-- Toggle: use dashboard filters -->
+      <div class="widget-filter-toggle-row">
+        <label class="toggle-switch">
+          <input type="checkbox" id="editUseDashFilters" checked
+            onchange="_updateEditFilterSections(this.checked)" />
+          <span class="toggle-slider"></span>
+        </label>
+        <div class="widget-filter-toggle-label">
+          <span>Use dashboard filters</span>
+          <small>Apply the global dashboard filters to this widget</small>
+        </div>
+      </div>
+
+      <!-- Section shown when dashboard filters ON: additional filters -->
+      <div id="editDashFilterSection">
+        <div class="dash-filter-info">
+          <i class="fa fa-info-circle" style="color:var(--accent)"></i>
+          <span>Dashboard filters are active. Add extra conditions below if needed.</span>
+        </div>
+      </div>
+
+      <div id="editAdditionalFilterSection">
+        <div class="filters-section" style="margin-top:12px">
+          <div class="filters-header">
+            <label>Additional Filters</label>
+            <button type="button" class="btn-ghost btn-xs" onclick="addEditFilter()"><i class="fa fa-plus"></i> Add</button>
+          </div>
+          <div id="editFiltersList"></div>
+        </div>
+      </div>
+
+      <!-- Section shown when dashboard filters OFF: full custom override -->
+      <div id="editCustomFilterSection" style="display:none">
+        <div class="dash-filter-info dash-filter-info-warn">
+          <i class="fa fa-exclamation-triangle" style="color:var(--warning)"></i>
+          <span>Dashboard filters ignored. Define this widget's own filters below.</span>
+        </div>
+        <div class="filters-section" style="margin-top:12px">
+          <div class="filters-header">
+            <label>Custom Filters</label>
+            <button type="button" class="btn-ghost btn-xs" onclick="addEditCustomFilter()"><i class="fa fa-plus"></i> Add</button>
+          </div>
+          <div id="editCustomFiltersList"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="edit-tab-content" id="editTab-style" style="display:none">
+      <div class="form-group">
+        <label>Chart Type</label>
+        <select id="editChartType" onchange="updateEditPreview()">
+          <option value="bar">Bar Chart</option>
+          <option value="line">Line Chart</option>
+          <option value="pie">Pie Chart</option>
+          <option value="donut">Donut Chart</option>
+          <option value="area">Area Chart</option>
+          <option value="scatter">Scatter</option>
+          <option value="kpi">KPI Card</option>
+          <option value="table">Table</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Color Palette</label>
+        <div class="palette-picker" id="editPalettePicker">
+          <button class="palette-btn active" data-palette="default" onclick="selectEditPalette('default')">
+            <span style="background:#6366f1"></span><span style="background:#8b5cf6"></span><span style="background:#ec4899"></span>
+          </button>
+          <button class="palette-btn" data-palette="ocean" onclick="selectEditPalette('ocean')">
+            <span style="background:#06b6d4"></span><span style="background:#0ea5e9"></span><span style="background:#6366f1"></span>
+          </button>
+          <button class="palette-btn" data-palette="forest" onclick="selectEditPalette('forest')">
+            <span style="background:#10b981"></span><span style="background:#34d399"></span><span style="background:#6ee7b7"></span>
+          </button>
+          <button class="palette-btn" data-palette="sunset" onclick="selectEditPalette('sunset')">
+            <span style="background:#f59e0b"></span><span style="background:#ef4444"></span><span style="background:#ec4899"></span>
+          </button>
+          <button class="palette-btn" data-palette="mono" onclick="selectEditPalette('mono')">
+            <span style="background:#1e293b"></span><span style="background:#475569"></span><span style="background:#94a3b8"></span>
+          </button>
+        </div>
+      </div>
+      <div class="form-group" id="editBarModeGroup" style="display:none">
+        <label>Bar Mode</label>
+        <select id="editBarModeSelect">
+          <option value="group">Grouped</option>
+          <option value="stack">Stacked</option>
+          <option value="relative">Stacked 100%</option>
+        </select>
+      </div>
+      <div class="form-group" id="editLineStyleGroup" style="display:none">
+        <label>Line Style</label>
+        <select id="editLineStyleSelect">
+          <option value="linear">Straight</option>
+          <option value="spline">Smooth (spline)</option>
+          <option value="hv">Step</option>
+        </select>
+      </div>
+      <div class="form-group" id="editLineMarkersGroup" style="display:none">
+        <label>Show Markers</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="editShowMarkers" checked />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="form-group">
+        <label>Show Legend</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="editShowLegend" checked />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="form-group">
+        <label>Show Data Labels</label>
+        <label class="toggle-switch">
+          <input type="checkbox" id="editShowLabels" />
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+    </div>
+
+    <div class="panel-footer sticky-footer">
+      <button class="btn-ghost" onclick="closeEditPanel()">Cancel</button>
+      <button class="btn-primary" onclick="applyWidgetEdit()"><i class="fa fa-check"></i> Apply Changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- Transform panel -->
+<div class="side-panel wide-panel" id="transformPanel">
+  <div class="panel-header">
+    <div>
+      <h3>Transform Data</h3>
+      <p class="panel-subtitle" id="transformPanelSubtitle">Configure column types &amp; formats</p>
+    </div>
+    <button class="icon-btn" onclick="closeTransformPanel()"><i class="fa fa-times"></i></button>
+  </div>
+  <div class="panel-body" id="transformBody">
+    <div class="transform-ds-selector">
+      <label>Dataset</label>
+      <select id="transformDsSelect" onchange="loadTransformColumns()"></select>
+    </div>
+    <div id="transformColumnsWrap"></div>
+  </div>
+  <div class="panel-footer sticky-footer">
+    <button class="btn-ghost" onclick="closeTransformPanel()">Cancel</button>
+    <button class="btn-ghost btn-sm" onclick="previewTransforms()"><i class="fa fa-eye"></i> Preview</button>
+    <button class="btn-primary" onclick="saveTransforms()"><i class="fa fa-check"></i> Apply &amp; Save</button>
+  </div>
+</div>
+
+<!-- Upload panel -->
+<div class="side-panel" id="uploadPanel">
+  <div class="panel-header">
+    <div><h3>Add Dataset</h3><p class="panel-subtitle">Upload a new data file</p></div>
+    <button class="icon-btn" onclick="closeUploadPanel()"><i class="fa fa-times"></i></button>
+  </div>
+  <div class="panel-body">
+    <div class="upload-zone" id="uploadZone2">
+      <input type="file" id="uploadFileInput2" accept=".xlsx,.xls,.csv" style="display:none" />
+      <div class="upload-icon"><i class="fa fa-cloud-upload-alt"></i></div>
+      <p class="upload-title">Drop file or <button type="button" onclick="document.getElementById('uploadFileInput2').click()">browse</button></p>
+      <p class="upload-sub">.xlsx, .xls, .csv</p>
+    </div>
+    <div id="uploadProgress" style="display:none">
+      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+      <p id="uploadStatus">Uploading...</p>
+    </div>
+  </div>
+</div>
+
+<!-- Dashboard Filters Panel -->
+<div class="side-panel" id="dashFilterPanel">
+  <div class="panel-header">
+    <div>
+      <h3>Dashboard Filters</h3>
+      <p class="panel-subtitle">Applied to all matching widgets</p>
+    </div>
+    <button class="icon-btn" onclick="closeAllPanels()"><i class="fa fa-times"></i></button>
+  </div>
+  <div class="panel-body" id="dashFilterBody">
+
+    <!-- Dataset selector to add filters for a specific dataset -->
+    <div class="dash-filter-add-bar">
+      <select id="dashFilterDsSelect" style="flex:1">
+        <option value="">— Select dataset —</option>
+      </select>
+      <button class="btn-ghost btn-sm" onclick="addDashboardFilterForDataset(document.getElementById('dashFilterDsSelect').value)">
+        <i class="fa fa-plus"></i> Add Filter
+      </button>
+    </div>
+
+    <div id="dashFilterRows"></div>
+  </div>
+  <div class="panel-footer sticky-footer" style="flex-direction:column;gap:10px;">
+    <div style="display:flex;gap:8px;width:100%">
+      <button class="btn-ghost btn-sm" style="flex:1" onclick="clearDashboardFilters()">
+        <i class="fa fa-times-circle"></i> Clear All
+      </button>
+      <button class="btn-primary" style="flex:2" onclick="applyDashboardFilters()">
+        <i class="fa fa-check"></i> Apply to Dashboard
+      </button>
+    </div>
+    <p style="font-size:11px;color:var(--text3);text-align:center;margin:0">
+      Individual widgets can override or extend these filters
+    </p>
+  </div>
+</div>
+
+<!-- Export progress overlay -->
+<div id="exportOverlay">
+  <div class="export-spinner"></div>
+  <p class="export-msg" id="exportMsg">Preparing export…</p>
+</div>
+
+<!-- Panel overlay -->
+<div class="panel-overlay" id="panelOverlay" onclick="closeAllPanels()"></div>
+
+<script>
+const DASHBOARD_UID = "{{ dashboard.uid }}";
+const INITIAL_WIDGETS = {{ widgets_json|safe }};
+const INITIAL_DATASETS = {{ datasets_json|safe }};
+const INITIAL_DASHBOARD_FILTERS = {{ dashboard_filters_json|safe }};
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/gridstack.js/10.3.1/gridstack-all.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.27.0/plotly.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+{% endblock %}

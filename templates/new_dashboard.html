@@ -1,0 +1,169 @@
+{% extends 'base.html' %}
+{% block title %}New Dashboard — DataLens{% endblock %}
+{% block content %}
+<div class="wizard-page">
+  <div class="wizard-container">
+    <!-- Steps indicator -->
+    <div class="wizard-steps">
+      <div class="step active" id="step-indicator-1">
+        <div class="step-num">1</div>
+        <span>Name & Info</span>
+      </div>
+      <div class="step-connector"></div>
+      <div class="step" id="step-indicator-2">
+        <div class="step-num">2</div>
+        <span>Upload Data</span>
+      </div>
+      <div class="step-connector"></div>
+      <div class="step" id="step-indicator-3">
+        <div class="step-num">3</div>
+        <span>Review & Create</span>
+      </div>
+    </div>
+
+    <form id="createForm">
+      <!-- Step 1: Name -->
+      <div class="wizard-step" id="step-1">
+        <div class="wizard-header">
+          <h2>Name your dashboard</h2>
+          <p>Give your dashboard a descriptive name so you can find it easily</p>
+        </div>
+        <div class="form-group">
+          <label>Dashboard Name <span class="required">*</span></label>
+          <input type="text" id="dashName" placeholder="e.g. Sales Q1 2024, Customer Analytics..." autofocus />
+        </div>
+        <div class="form-group">
+          <label>Description <span class="optional">(optional)</span></label>
+          <textarea id="dashDesc" placeholder="What data will this dashboard show?" rows="3"></textarea>
+        </div>
+        <div class="wizard-actions">
+          <a href="{{ url_for('home') }}" class="btn-ghost">Cancel</a>
+          <button type="button" class="btn-primary" onclick="goStep(2)">Continue <i class="fa fa-arrow-right"></i></button>
+        </div>
+      </div>
+
+      <!-- Step 2: Upload -->
+      <div class="wizard-step" id="step-2" style="display:none">
+        <div class="wizard-header">
+          <h2>Upload your data</h2>
+          <p>Add Excel or CSV files. You can always add more files later from the dashboard.</p>
+        </div>
+
+        <div class="upload-zone" id="uploadZone">
+          <input type="file" id="fileInput" multiple accept=".xlsx,.xls,.csv" style="display:none" />
+          <div class="upload-icon"><i class="fa fa-cloud-upload-alt"></i></div>
+          <p class="upload-title">Drop files here or <button type="button" onclick="document.getElementById('fileInput').click()">browse</button></p>
+          <p class="upload-sub">Supports .xlsx, .xls, .csv — max 50MB each</p>
+        </div>
+
+        <div id="fileList" class="file-list"></div>
+
+        <div class="wizard-actions">
+          <button type="button" class="btn-ghost" onclick="goStep(1)"><i class="fa fa-arrow-left"></i> Back</button>
+          <button type="button" class="btn-primary" onclick="goStep(3)">Continue <i class="fa fa-arrow-right"></i></button>
+        </div>
+      </div>
+
+      <!-- Step 3: Review -->
+      <div class="wizard-step" id="step-3" style="display:none">
+        <div class="wizard-header">
+          <h2>Review & Create</h2>
+          <p>Everything looks good? Create your dashboard and start adding widgets.</p>
+        </div>
+        <div class="review-card">
+          <div class="review-row"><span>Name</span><strong id="reviewName">—</strong></div>
+          <div class="review-row"><span>Description</span><strong id="reviewDesc">—</strong></div>
+          <div class="review-row"><span>Files</span><strong id="reviewFiles">0 files</strong></div>
+        </div>
+        <div class="wizard-actions">
+          <button type="button" class="btn-ghost" onclick="goStep(2)"><i class="fa fa-arrow-left"></i> Back</button>
+          <button type="button" class="btn-primary" id="createBtn" onclick="submitDashboard()">
+            <i class="fa fa-rocket"></i> Create Dashboard
+          </button>
+        </div>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+let selectedFiles = [];
+
+function goStep(n) {
+  if (n === 2) {
+    if (!document.getElementById('dashName').value.trim()) {
+      document.getElementById('dashName').focus();
+      document.getElementById('dashName').classList.add('shake');
+      setTimeout(() => document.getElementById('dashName').classList.remove('shake'), 500);
+      return;
+    }
+  }
+  if (n === 3) {
+    document.getElementById('reviewName').textContent = document.getElementById('dashName').value.trim();
+    document.getElementById('reviewDesc').textContent = document.getElementById('dashDesc').value.trim() || '—';
+    document.getElementById('reviewFiles').textContent = selectedFiles.length + ' file(s) selected';
+  }
+  document.querySelectorAll('.wizard-step').forEach(s => s.style.display = 'none');
+  document.getElementById('step-' + n).style.display = 'block';
+  document.querySelectorAll('.step').forEach((s, i) => {
+    s.classList.toggle('active', i < n);
+    s.classList.toggle('done', i + 1 < n);
+  });
+}
+
+// Drag & drop upload zone
+const zone = document.getElementById('uploadZone');
+zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+zone.addEventListener('drop', e => {
+  e.preventDefault(); zone.classList.remove('drag-over');
+  addFiles([...e.dataTransfer.files]);
+});
+document.getElementById('fileInput').addEventListener('change', e => addFiles([...e.target.files]));
+
+function addFiles(files) {
+  files.forEach(f => {
+    if (!selectedFiles.find(x => x.name === f.name)) selectedFiles.push(f);
+  });
+  renderFileList();
+}
+
+function removeFile(name) {
+  selectedFiles = selectedFiles.filter(f => f.name !== name);
+  renderFileList();
+}
+
+function renderFileList() {
+  const list = document.getElementById('fileList');
+  list.innerHTML = selectedFiles.map(f => `
+    <div class="file-item">
+      <i class="fa fa-file-excel"></i>
+      <span class="file-name">${f.name}</span>
+      <span class="file-size">${(f.size/1024/1024).toFixed(2)} MB</span>
+      <button type="button" onclick="removeFile('${f.name}')" class="icon-btn danger"><i class="fa fa-times"></i></button>
+    </div>
+  `).join('');
+}
+
+async function submitDashboard() {
+  const btn = document.getElementById('createBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fa fa-spinner fa-spin"></i> Creating...';
+
+  const fd = new FormData();
+  fd.append('name', document.getElementById('dashName').value.trim());
+  fd.append('description', document.getElementById('dashDesc').value.trim());
+  selectedFiles.forEach(f => fd.append('files', f));
+
+  const res = await fetch('/api/dashboard/create', { method: 'POST', body: fd });
+  const data = await res.json();
+  if (data.redirect) {
+    window.location.href = data.redirect;
+  } else {
+    alert('Error: ' + (data.error || 'Unknown error'));
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fa fa-rocket"></i> Create Dashboard';
+  }
+}
+</script>
+{% endblock %}
