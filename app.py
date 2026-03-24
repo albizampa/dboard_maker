@@ -252,6 +252,10 @@ class DB:
             return DB.execute(DB._pg_sql(sql), params)
         return DB.execute(sql, params)
 
+def initialize_database():
+    """Initialize schema/users for both local run and WSGI servers."""
+    DB.init()
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # FILE STORAGE ABSTRACTION
@@ -845,8 +849,9 @@ def update_layouts(uid):
 # RUN
 # ══════════════════════════════════════════════════════════════════════════════
 
+initialize_database()
+
 if __name__ == '__main__':
-    DB.init()
     port = int(os.environ.get('PORT', 5050))
     debug = not USE_SUPABASE
     app.run(debug=debug, host='0.0.0.0', port=port)
